@@ -1,8 +1,10 @@
-# Script to pull Hemlock sites from the Neotoma Paleoecology Database
+# Script to pull Hemlock sites and multi-taxa site from the Neotoma Paleoecology Database
 # And eliminate sites that don't meet minimum resolution and chronology requirements
 # Copyright 2017 by M. Allison Stegner
 
-# FUNCTIONS___________________________________________________
+########################################################################################
+###############################    FUNCTIONS     #######################################
+########################################################################################
 
 # has.chron______________________________________________________
 # function to select ids for datasets that have a chonolorgy in Neotoma db
@@ -215,7 +217,37 @@ trim_to<-function(tax_dec_dl,min.age,cutoff){
 		return(adequate.n=ind)
 }
 
+# pull.multi.spp________________________________________________________
+pull.multi.spp<-function(hem_dec_dl,j,TAXON){
+	sitei<-hem_dec_dl[[j]]$counts
+	sort(colnames(sitei))
+	if (length(grep("Lycopodium", colnames(sitei)))==0){
+		sitei<-sitei
+	} else {
+		sitei<-sitei[,-grep("Lycopodium", colnames(sitei))]
+	}
+	
+	all_taxa <- do.call(rbind.data.frame, lapply(hem_dec_dl, function(x)x$taxon.list[,1:6]))
+	all_taxa <- all_taxa[!duplicated(all_taxa),]
+	good_cols<-c(which(colnames(sitei) %in% all_taxa[all_taxa$ecological.group %in% c("TRSH","UPHE"),1]))	
+	sitei<-sitei[,good_cols]
+	#sitei<-compile_taxa(sitei,list.name="WS64")
+	sitei.pct<-sitei[,1:ncol(sitei)]/rowSums(sitei[,1:ncol(sitei)],na.rm=TRUE)
 
+	#taxa.list<-TAXON
+	taxoni<-sitei.pct[,grep(TAXON,colnames(sitei.pct),ignore.case=TRUE)]
+	if (length(taxoni)==0) taxoni<-rep(NA,nrow(sitei.pct)) 
+	if (is.matrix(taxoni)) taxoni<-rowSums(taxoni)
+	
+	taxon.matx<-taxoni
+	
+	AM<-hem_dec_dl[[j]]$sample.meta$age
+	
+	taxon.matx2<-cbind(AM,taxon.matx)
+	colnames(taxon.matx2)<-c("age",TAXON)
+
+	write.csv(taxon.matx2,paste(TAXON,"_",names(hem_dec_dl[j]),".csv",sep=""),row.names=F)
+}
 
 #map_dl________________________________________________________
 # function to map location of sites
@@ -251,12 +283,126 @@ map_dl<-function(tax_dec_dl,X,Y,add,color,label.sites){
 	return(out)
 }
 
+# a simpler version on map_dl that does not produce a map
+map_dl_2<-function(tax_dec_dl){
+	# if (add==FALSE){
+	# 	map("world",xlim=X,ylim=Y)
+	# } 
+	lat<-c()
+	long<-c()
+	dataset.id<-c()
+	site.name<-c()
+	site.id<-c()
+	for (i in 1:length(tax_dec_dl)){
+		long[i]<-tax_dec_dl[[i]]$dataset$site.data$long
+		lat[i]<-tax_dec_dl[[i]]$dataset$site.data$lat
+		# points(long[i],lat[i],pch=16,col=color)
+		dataset.id[i]<-tax_dec_dl[[i]]$dataset$dataset.meta$dataset.id
+		site.name[i]<-tax_dec_dl[[i]]$dataset$site.data$site.name
+		site.id[i]<-tax_dec_dl[[i]]$dataset$site.data$site.id
+	}
+	# if (label.sites==TRUE){
+	# 	text(long,lat,site.id,cex=0.5,pos=4,offset=0.2)
+	# }
+	
+	out<-cbind(site.name,dataset.id,site.id,lat,long)
+	return(out)
+}
+
 #END FUNCTIONS________________________________________
 
 
 library(neotoma)
 #library(dplyr)
 library(maps)
+
+########################################################################################
+############################  multi-taxa analyses  #####################################
+########################################################################################
+
+source("~/map_dl_7May2018.R")
+source("~/Lottery_Model_functions_7May2018.R")
+
+ALLTAXON <- c("Alnus*", "Fagus*", "Juglans*", "Picea*", "Platanus*",  "Tilia*", "Tsuga*", "Ulmus*", "Pinus banksiana", "Pinus banksiana-type", "Pinus resinosa-type", "Pinus subg. Pinus", "Pinus strobus", "Pinus subg. Strobus", "Pinus subg. Strobus undiff.", "Pinus det. P. strobus")
+
+alltaxon <- c("Alnus", "Fagus", "Juglans", "Picea", "Platanus",  "Tilia", "Tsuga", "Ulmus", "Pinus banksiana", "Pinus banksiana-type", "Pinus resinosa-type", "Pinus subg. Pinus", "Pinus strobus", "Pinus subg. Strobus", "Pinus subg. Strobus undiff.", "Pinus det. P. strobus")
+
+
+setwd("~/final_data/") ##choose where to save the new files
+# contains all names from tn (above)  that contains "Pinus" 
+
+LL <- length(ALLTAXON)
+for(i in 1:LL){
+	print(i)
+	# i <- 1
+	TAXON <- as.character(ALLTAXON[i])
+	print(TAXON)
+	tax_dec<-get_dataset(taxonname = TAXON, datasettype = "pollen", loc = c(-105, 25, -60, 55))
+	if(length(tax_dec) == 0) next
+
+	# download datasets from Neotoma database	
+	# this next line may take up to 30 min to run	
+	tax_dec_dl<-get_download(tax_dec, verbose = FALSE)
+
+	#limit to sites with chronologies
+	pol_chron<-has.chron(tax_dec_dl) #expect warnigns here. Not an issue
+	pol_chron<-pol_chron[complete.cases(pol_chron)]
+	pol_dl_sub1<-tax_dec_dl[as.character(pol_chron)]
+	if(length(pol_dl_sub1) == 0) next
+
+	#limit to sites with at least n samples
+	pol_n<-ts.min.length(pol_dl_sub1,20)
+	pol_n<-pol_n[complete.cases(pol_n)]
+	pol_dl_sub2<-pol_dl_sub1[as.character(pol_n)]
+	if(length(pol_dl_sub2) == 0) next
+
+	#limit to sites with minimum level of average resolution
+	pol_high<-select.high.res(pol_dl_sub2,200)
+	pol_dl_sub3<-pol_dl_sub2[as.character(pol_high)]
+	if(length(pol_dl_sub3) == 0) next
+
+	#limit to sites with adequate chron controls
+	pol_chroncont<-min.chron.control(pol_dl_sub3,2000)
+	pol_dl_sub4<-pol_dl_sub3[as.character(pol_chroncont)]
+	if(length(pol_dl_sub4) == 0) next
+
+	# limit to sites that reach minimum % pollen
+	# and for which Tsuga pollen is sampled in at least 50% of samples
+	eco<-c("TRSH", "UPHE")
+	min.pct<-0.0
+	pct.zeros<-0.5
+
+	taxon <- alltaxon[i]
+	min.tax<-min_pol_pct(pol_dl_sub4,eco,taxon,min.pct,pct.zeros,"ecological.group")	
+	pol_dl_sub5<-pol_dl_sub4[as.character(min.tax)]
+	if(length(pol_dl_sub5) == 0) next
+
+
+	# limit to sites with at least 20 datapoints older than 1000 years BP
+	ids<-trim_to(pol_dl_sub5,1000,20)
+	id.list<-ids[complete.cases(ids)]
+	pol_dl_sub6<-pol_dl_sub5[as.character(id.list)]
+	length(pol_dl_sub6)  
+	if(length(pol_dl_sub6) == 0) next
+
+	# generate csv files
+	tax_dec_dl<-pol_dl_sub6
+
+	for (j in 1:length(tax_dec_dl)){
+		print(j)
+		pull.multi.spp(tax_dec_dl,j, taxon)
+	}
+	nameout <- paste(taxon, "_site_info.csv", sep = "")
+	out <- map_dl_2(tax_dec_dl)
+	write.csv(out, nameout)	
+}
+
+###########################      FUNCTIONS ends     ####################################
+########################################################################################
+
+########################################################################################
+########################### TSUGA specific analyses ####################################
+########################################################################################
 
 # query Neotoma database
 # requires internet connection
@@ -328,10 +474,10 @@ library('bcp')
 ################ HEMLOCK DATA FINAL BCP FIT #################
 #############################################################
 
-#--------------------------------------------------------------------#
-## This code is used for all figures that showed empirical data set ##
-#--------------------------------------------------------------------#
-setwd("/Users/gola/Box Sync/projects/paleo_lottery/hemlock_data")
+#------------------------------------------------------------------------#
+## This code is used for figures that showed hemlock empirical data set ##
+#------------------------------------------------------------------------#
+setwd("/Users/gola/Box Sync/projects/ACES_paleo_lottery/data/hemlock_data")
 
 # sites ID extracted from neotoma
 ID <- c(238, 494, 503, 516, 532, 795, 871, 971, 973, 986, 1105, 1136, 1137,1615, 1698, 1820, 1981, 2023, 2292, 2332, 3058, 3131, 3454, 13047, 14410, 15032,15209, 15350, 15660, 15682, 15732, 15764, 15866, 15892, 15904, 15909, 15931, 16189, 16231, 16271, 17387, 17404, 18110, 19842,20397, 20512, 20627)
@@ -356,6 +502,34 @@ for (id in ID){
 }
 
 
+#----------------------------------------------------------------------------#
+## This code is used for multi-taxa analyses ##
+#----------------------------------------------------------------------------#
+setwd("/Users/gola/Box Sync/projects/ACES_paleo_lottery/data/clean_allsp_data/")
+library("bcp")
+
+idSP <- read.csv("/Users/gola/Box Sync/projects/ACES_paleo_lottery/data/all_clean_ID.csv", header = F)
+
+for(i in 1:nrow(idSP)){
+	sp <- idSP[i,1]
+	id <- idSP[i,2]
+	name <- paste(sp,'_',id,'.csv', sep = "")
+	print(name)
+	dat <- read.csv(name, header = F)
+	res1 <- dat
+	res2 <- dat
+	r <- bcp( y = as.numeric(dat[,2]) , w0 = 0.2, p0 = 0., burnin = 1000, mcmc = 10000) # runs the bcp analysis
+	res1[,2] <- r$posterior.prob
+	res2[,2] <- r$posterior.mean
+	
+	# export the data where _pp_ and _pm_ differentiate posterior probability and posterior mean
+	name1 <- paste(sp,'_pp_',id,'.csv', sep = "")
+	name2 <- paste(sp,'_pm_',id,'.csv', sep = "")
+	write.table(res1,name1, sep = ",", row.names = FALSE, col.names = FALSE)
+	write.table(res2,name2, sep = ",", row.names = FALSE, col.names = FALSE)
+}
+
+
 ######################################################
 ################ SIMULATED  EXAMPLE ##################
 ######################################################
@@ -366,17 +540,19 @@ for (id in ID){
 
 
 # use bcp to fit simulated data that resembles one hemlock time-series
-dat <- read.csv("/Users/gola/Box Sync/projects/paleo_lottery/simulated_data/fig1/sim_s_0.2_seed_3.csv", header = F)
+dat <- read.csv("/Users/gola/Box Sync/projects/ACES_paleo_lottery/data/simulated_data/fig1/sim_s_0.2_seed_3.csv", header = F)
 
 r <- bcp(dat$V1, w0 = .2, p0 = 0., burnin = 1000, mcmc = 10000)
 
 res1 <- r$posterior.prob
 res2 <- r$posterior.mean
 
-name1 <- paste('/Users/gola/Box Sync/projects/paleo_lottery/simulated_data/fig1/sim_pp_s_0.2_seed_3.csv', sep = "")
-name2 <- paste('/Users/gola/Box Sync/projects/paleo_lottery/simulated_data/fig1/sim_pm_s_0.2_seed_3.csv', sep = "")
+name1 <- paste('/Users/gola/Box Sync/projects/ACES_paleo_lottery/data/simulated_data/fig1/sim_pp_s_0.2_seed_3.csv', sep = "")
+name2 <- paste('/Users/gola/Box Sync/projects/ACES_aleo_lottery/data/simulated_data/fig1/sim_pm_s_0.2_seed_3.csv', sep = "")
 write.csv(res1,name1,  row.names = FALSE)
 write.csv(res2,name2,  row.names = FALSE)
+
+# for the Fagus site used in fig 1C, use the fitted data from the mult-taxa analyes
 
 ######################################################
 ############## FIT SIMULATED DATA ####################
@@ -384,10 +560,10 @@ write.csv(res2,name2,  row.names = FALSE)
 ######################################################
 
 #--------------------------------------------------------------------#
-##                  This code is used for figure 2                  ##
+##                  This code is used for figure 2E                 ##
 #--------------------------------------------------------------------#
 
-setwd('/Users/gola/Box Sync/projects/paleo_lottery/simulated_data/fig2')
+setwd('/Users/gola/Box Sync/projects/ACES_paleo_lottery/data/simulated_data/fig2')
 
 SS <- seq(0,10,1) # SS is the vector ID of different strength of the density-dependences (s).
 
@@ -420,16 +596,51 @@ for(ss in SS){
 }
 
 
+#--------------------------------------------------------------------#
+##                  This code is used for figure 2F                 ##
+#--------------------------------------------------------------------#
+setwd('/Users/gola/Box Sync/projects/ACES_paleo_lottery/data/simulated_data/fig2_same_I')
+
+SS <- seq(0,10,1) # SS is the vector ID of different strength of the density-dependences (s).
+
+for(ss in SS){
+	# sed is the ID of the seed used in the simulation
+	for (sed in 1:100) {
+		name <- paste('sim_s_',ss,'_seed_',sed,'.csv', sep = "")
+		dat <- read.csv(name, header = F)
+		
+		# nr is the number of sites exported from the simulated data (should be 32)
+		# nc is the number of points in the time series
+		nr <- dim(dat)[1]
+		nc <- dim(dat)[2]
+		
+		# initialize matrix that contains the fitted bcp for each posterior probability and posterior mean
+		res1 <- matrix(0., nrow = nr, ncol =  nc)
+		res2 <- matrix(0., nrow = nr, ncol =  nc)
+		# fits each time-series for each site
+		for(i in 1:nr){
+			r <- bcp(as.numeric(dat[i,]), w0 = .2, p0 = 0., burnin = 1000, mcmc = 10000)
+			res1[i,] <- r$posterior.prob
+			res2[i,] <- r$posterior.mean
+
+		}
+		name1 <- paste('sim_pp_s_',ss,'_seed_',sed,'.csv', sep = "")
+		name2 <- paste('sim_pm_s_',ss,'_seed_',sed,'.csv', sep = "")
+		write.csv(res1,name1,  row.names = FALSE)
+		write.csv(res2,name2,  row.names = FALSE)
+	}
+}
+
 ######################################################
 ############## FIT SIMULATED DATA ####################
 ########  WITH SPATIAL AUTOCORRELATION    ############
 ######################################################
 
 #--------------------------------------------------------------------#
-##      This code is used for figures  3BD, 4BDF and 5A             ##
+##      This code is used for figures  4BD, 5BDF and 6A             ##
 #--------------------------------------------------------------------#
 
-setwd('/Users/gola/Box Sync/projects/paleo_lottery/simulated_data/fig5a')
+setwd('/Users/gola/Box Sync/projects/ACES_paleo_lottery/data/simulated_data/fig5a')
 
 RR <- seq(0,8, by = 1) # RR is the vector ID for different parameter values for spatial autocorrelation (rho).
 lr <- length(RR)
@@ -470,10 +681,10 @@ for(k in 1:lr){
 ######################################################
 
 #--------------------------------------------------------------------#
-##                 This code is used for figure 5B                  ##
+##                 This code is used for figure 6B                  ##
 #--------------------------------------------------------------------#
 
-setwd('/Users/gola/Box Sync/projects/paleo_lottery/simulated_data/fig5b')
+setwd('/Users/gola/Box Sync/projects/ACES_paleo_lottery/data/simulated_data/fig5b')
 
 FF <- seq(0,10, by = 1) # FF is the vector ID for different parameter values for dispersal (f).
 lf <- length(FF)
